@@ -1,465 +1,309 @@
--- Auto Forge Script - Delta Compatible
--- Optimized for mobile executors
-
-local Players = game:GetService("Players")
+-- Decompiled environment simulation & Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
 
-local Player = Players.LocalPlayer
-local PlayerGui = Player:WaitForChild("PlayerGui")
+--// CONFIGURATION
+local SCROLL_TIER_TARGET = 5 -- Dark Scroll Tier
+local SCROLL_NAME_DISPLAY = "Dark Scroll"
 
--- Wait for game to load
-repeat task.wait() until game:IsLoaded()
-task.wait(2)
+--// KNIT & DATA RETRIEVAL
+local Knit = require(ReplicatedStorage.Packages.Knit)
+local ForgeService = Knit.GetService("ForgeService")
+local AccessoryInfo = require(ReplicatedStorage.GameInfo.AccessoryInfo)
 
--- Get dependencies
-local Knit, AccessoryInfo, GameSettings
-local success = pcall(function()
-	Knit = require(ReplicatedStorage.Packages.Knit)
-	AccessoryInfo = require(ReplicatedStorage.GameInfo.AccessoryInfo)
-	GameSettings = require(ReplicatedStorage.GameSettings)
-end)
+--// CONTROLLER ACCESS
+-- We need to access the client side data replica to see what you own
+local ReplicaListener = Knit.GetController("ReplicaListener")
+local PlayerReplica = ReplicaListener:GetReplica()
 
-if not success then
-	warn("Failed to load dependencies")
-	return
+--// UI SETUP
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "FastForgeUI"
+ScreenGui.ResetOnSpawn = false
+-- Protect GUI if using Synapse/Krnl (Standard protection)
+if syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
+ScreenGui.Parent = CoreGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 500, 0, 400)
+MainFrame.Position = UDim2.new(0.5, -250, 0.5, -200)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+-- Title Bar
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -20, 0, 40)
+TitleLabel.Position = UDim2.new(0, 10, 0, 5)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "⚡ Fast Forge: " .. SCROLL_NAME_DISPLAY
+TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 18
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = MainFrame
+
+-- Scroll Counter
+local ScrollCounter = Instance.new("TextLabel")
+ScrollCounter.Size = UDim2.new(0, 150, 0, 40)
+ScrollCounter.Position = UDim2.new(1, -160, 0, 5)
+ScrollCounter.BackgroundTransparency = 1
+ScrollCounter.Text = "Scrolls: Loading..."
+ScrollCounter.TextColor3 = Color3.fromRGB(100, 255, 100)
+ScrollCounter.Font = Enum.Font.GothamBold
+ScrollCounter.TextSize = 16
+ScrollCounter.TextXAlignment = Enum.TextXAlignment.Right
+ScrollCounter.Parent = MainFrame
+
+-- Container for Grid
+local ScrollContainer = Instance.new("ScrollingFrame")
+ScrollContainer.Size = UDim2.new(1, -20, 1, -60)
+ScrollContainer.Position = UDim2.new(0, 10, 0, 50)
+ScrollContainer.BackgroundTransparency = 1
+ScrollContainer.ScrollBarThickness = 6
+ScrollContainer.Parent = MainFrame
+
+local UIGridLayout = Instance.new("UIGridLayout")
+UIGridLayout.CellSize = UDim2.new(0, 145, 0, 160)
+UIGridLayout.CellPadding = UDim2.new(0, 10, 0, 10)
+UIGridLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIGridLayout.Parent = ScrollContainer
+
+--// LOGIC VARIABLES
+local AutoForgeTargetGUID = nil
+local IsForging = false
+
+--// HELPER FUNCTIONS
+local function GetScrollAmount()
+    if PlayerReplica and PlayerReplica.Data then
+        -- Navigate structure: Data -> ItemsService -> Inventory -> Scrolls -> "5"
+        local inv = PlayerReplica.Data.ItemsService.Inventory
+        if inv and inv.Scrolls and inv.Scrolls[tostring(SCROLL_TIER_TARGET)] then
+            return inv.Scrolls[tostring(SCROLL_TIER_TARGET)]
+        end
+    end
+    return 0
 end
 
--- Wait for Knit
-repeat task.wait() until Knit.Started
-
--- Variables
-local replica
-local forgeService
-local autoForgeEnabled = false
-local selectedAccessories = {}
-
--- Get services
-forgeService = Knit.GetService("ForgeService")
-local replicaController = Knit.GetController("ReplicaListener")
-replica = replicaController:GetReplica()
-
--- Create simple UI
-local function createUI()
-	local gui = Instance.new("ScreenGui")
-	gui.Name = "AutoForge"
-	gui.ResetOnSpawn = false
-	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	
-	-- Main Frame
-	local main = Instance.new("Frame")
-	main.Name = "Main"
-	main.Size = UDim2.new(0, 400, 0, 500)
-	main.Position = UDim2.new(0.5, -200, 0.5, -250)
-	main.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-	main.BorderSizePixel = 2
-	main.BorderColor3 = Color3.fromRGB(188, 98, 18)
-	main.Parent = gui
-	
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 10)
-	corner.Parent = main
-	
-	-- Title
-	local title = Instance.new("TextLabel")
-	title.Size = UDim2.new(1, -20, 0, 40)
-	title.Position = UDim2.new(0, 10, 0, 10)
-	title.BackgroundTransparency = 1
-	title.Text = "AUTO FORGE - DARK SCROLL T5"
-	title.Font = Enum.Font.GothamBold
-	title.TextSize = 16
-	title.TextColor3 = Color3.fromRGB(255, 200, 100)
-	title.Parent = main
-	
-	-- Info
-	local info = Instance.new("TextLabel")
-	info.Name = "Info"
-	info.Size = UDim2.new(1, -20, 0, 30)
-	info.Position = UDim2.new(0, 10, 0, 55)
-	info.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-	info.BorderSizePixel = 0
-	info.Text = "Dark Scrolls: 0 | Selected: 0"
-	info.Font = Enum.Font.Gotham
-	info.TextSize = 14
-	info.TextColor3 = Color3.fromRGB(255, 255, 255)
-	info.Parent = main
-	
-	local infoCorner = Instance.new("UICorner")
-	infoCorner.CornerRadius = UDim.new(0, 6)
-	infoCorner.Parent = info
-	
-	-- List
-	local list = Instance.new("ScrollingFrame")
-	list.Name = "List"
-	list.Size = UDim2.new(1, -20, 1, -180)
-	list.Position = UDim2.new(0, 10, 0, 95)
-	list.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-	list.BorderSizePixel = 0
-	list.ScrollBarThickness = 6
-	list.Parent = main
-	
-	local listCorner = Instance.new("UICorner")
-	listCorner.CornerRadius = UDim.new(0, 6)
-	listCorner.Parent = list
-	
-	local layout = Instance.new("UIListLayout")
-	layout.Padding = UDim.new(0, 5)
-	layout.Parent = list
-	
-	-- Buttons
-	local btnFrame = Instance.new("Frame")
-	btnFrame.Size = UDim2.new(1, -20, 0, 70)
-	btnFrame.Position = UDim2.new(0, 10, 1, -80)
-	btnFrame.BackgroundTransparency = 1
-	btnFrame.Parent = main
-	
-	local selectBtn = Instance.new("TextButton")
-	selectBtn.Name = "SelectBtn"
-	selectBtn.Size = UDim2.new(0.48, 0, 0, 30)
-	selectBtn.Position = UDim2.new(0, 0, 0, 0)
-	selectBtn.BackgroundColor3 = Color3.fromRGB(52, 152, 219)
-	selectBtn.Text = "SELECT ALL"
-	selectBtn.Font = Enum.Font.GothamBold
-	selectBtn.TextSize = 14
-	selectBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	selectBtn.Parent = btnFrame
-	
-	local selectCorner = Instance.new("UICorner")
-	selectCorner.CornerRadius = UDim.new(0, 6)
-	selectCorner.Parent = selectBtn
-	
-	local deselectBtn = Instance.new("TextButton")
-	deselectBtn.Name = "DeselectBtn"
-	deselectBtn.Size = UDim2.new(0.48, 0, 0, 30)
-	deselectBtn.Position = UDim2.new(0.52, 0, 0, 0)
-	deselectBtn.BackgroundColor3 = Color3.fromRGB(149, 165, 166)
-	deselectBtn.Text = "DESELECT ALL"
-	deselectBtn.Font = Enum.Font.GothamBold
-	deselectBtn.TextSize = 14
-	deselectBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	deselectBtn.Parent = btnFrame
-	
-	local deselectCorner = Instance.new("UICorner")
-	deselectCorner.CornerRadius = UDim.new(0, 6)
-	deselectCorner.Parent = deselectBtn
-	
-	local forgeBtn = Instance.new("TextButton")
-	forgeBtn.Name = "ForgeBtn"
-	forgeBtn.Size = UDim2.new(1, 0, 0, 30)
-	forgeBtn.Position = UDim2.new(0, 0, 0, 40)
-	forgeBtn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
-	forgeBtn.Text = "START AUTO FORGE"
-	forgeBtn.Font = Enum.Font.GothamBold
-	forgeBtn.TextSize = 16
-	forgeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	forgeBtn.Parent = btnFrame
-	
-	local forgeCorner = Instance.new("UICorner")
-	forgeCorner.CornerRadius = UDim.new(0, 6)
-	forgeCorner.Parent = forgeBtn
-	
-	-- Close
-	local closeBtn = Instance.new("TextButton")
-	closeBtn.Name = "Close"
-	closeBtn.Size = UDim2.new(0, 30, 0, 30)
-	closeBtn.Position = UDim2.new(1, -40, 0, 10)
-	closeBtn.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
-	closeBtn.Text = "X"
-	closeBtn.Font = Enum.Font.GothamBold
-	closeBtn.TextSize = 18
-	closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	closeBtn.Parent = main
-	
-	local closeCorner = Instance.new("UICorner")
-	closeCorner.CornerRadius = UDim.new(0, 6)
-	closeCorner.Parent = closeBtn
-	
-	gui.Parent = PlayerGui
-	return gui
+local function GetAccessoryImage(name)
+    local info = AccessoryInfo[name]
+    if info and info.Image then
+        return "rbxassetid://" .. info.Image
+    end
+    return "" -- Placeholder
 end
 
--- Create item
-local function createItem(guid, data, parent)
-	local info = AccessoryInfo[data.Name]
-	if not info then return end
-	
-	local item = Instance.new("Frame")
-	item.Name = guid
-	item.Size = UDim2.new(1, -5, 0, 70)
-	item.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-	item.BorderSizePixel = 0
-	item.Parent = parent
-	
-	local itemCorner = Instance.new("UICorner")
-	itemCorner.CornerRadius = UDim.new(0, 6)
-	itemCorner.Parent = item
-	
-	-- Check
-	local check = Instance.new("TextButton")
-	check.Name = "Check"
-	check.Size = UDim2.new(0, 25, 0, 25)
-	check.Position = UDim2.new(0, 8, 0.5, -12)
-	check.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-	check.Text = ""
-	check.Parent = item
-	
-	local checkCorner = Instance.new("UICorner")
-	checkCorner.CornerRadius = UDim.new(0, 4)
-	checkCorner.Parent = check
-	
-	local mark = Instance.new("TextLabel")
-	mark.Name = "Mark"
-	mark.Size = UDim2.new(1, 0, 1, 0)
-	mark.BackgroundTransparency = 1
-	mark.Text = "✓"
-	mark.Font = Enum.Font.GothamBold
-	mark.TextSize = 16
-	mark.TextColor3 = Color3.fromRGB(46, 204, 113)
-	mark.Visible = false
-	mark.Parent = check
-	
-	-- Icon
-	local icon = Instance.new("ImageLabel")
-	icon.Size = UDim2.new(0, 50, 0, 50)
-	icon.Position = UDim2.new(0, 40, 0.5, -25)
-	icon.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-	icon.BorderSizePixel = 0
-	icon.Image = "rbxassetid://" .. tostring(info.Image)
-	icon.Parent = item
-	
-	local iconCorner = Instance.new("UICorner")
-	iconCorner.CornerRadius = UDim.new(0, 6)
-	iconCorner.Parent = icon
-	
-	-- Text
-	local mult = GameSettings.GetUpdatedMultiplier(data, info.Multiplier)
-	local tier = data.Scroll and data.Scroll.Tier or 0
-	
-	local name = Instance.new("TextLabel")
-	name.Size = UDim2.new(1, -105, 0, 18)
-	name.Position = UDim2.new(0, 95, 0, 8)
-	name.BackgroundTransparency = 1
-	name.Text = data.Name
-	name.Font = Enum.Font.GothamBold
-	name.TextSize = 13
-	name.TextColor3 = Color3.fromRGB(255, 255, 255)
-	name.TextXAlignment = Enum.TextXAlignment.Left
-	name.TextTruncate = Enum.TextTruncate.AtEnd
-	name.Parent = item
-	
-	local power = Instance.new("TextLabel")
-	power.Size = UDim2.new(1, -105, 0, 16)
-	power.Position = UDim2.new(0, 95, 0, 28)
-	power.BackgroundTransparency = 1
-	power.Text = string.format("Power: %.2fx", mult)
-	power.Font = Enum.Font.Gotham
-	power.TextSize = 11
-	power.TextColor3 = Color3.fromRGB(248, 196, 113)
-	power.TextXAlignment = Enum.TextXAlignment.Left
-	power.Parent = item
-	
-	local scroll = Instance.new("TextLabel")
-	scroll.Size = UDim2.new(1, -105, 0, 16)
-	scroll.Position = UDim2.new(0, 95, 0, 46)
-	scroll.BackgroundTransparency = 1
-	scroll.Text = "Scroll: " .. (tier > 0 and ("T" .. tier) or "None")
-	scroll.Font = Enum.Font.Gotham
-	scroll.TextSize = 11
-	scroll.TextColor3 = tier > 0 and Color3.fromRGB(155, 89, 182) or Color3.fromRGB(149, 165, 166)
-	scroll.TextXAlignment = Enum.TextXAlignment.Left
-	scroll.Parent = item
-	
-	return item, check, mark
+local function GetMultiplierText(itemData, itemStaticInfo)
+    -- Logic derived from provided InventoryController/AccessoryInfo
+    -- Just returning a string summary for the UI
+    local text = ""
+    if itemStaticInfo.Multipliers then
+        for stat, baseVal in pairs(itemStaticInfo.Multipliers) do
+            text = text .. stat .. "\n"
+        end
+    end
+    return text
 end
 
--- Update list
-local function updateList(gui)
-	if not replica then return end
-	
-	local list = gui.Main.List
-	for _, child in pairs(list:GetChildren()) do
-		if child:IsA("Frame") then
-			child:Destroy()
-		end
-	end
-	
-	local accessories = replica.Data.AccessoryService.Accessories
-	local sorted = {}
-	
-	for guid, acc in pairs(accessories) do
-		if next(acc) and AccessoryInfo[acc.Name] then
-			local info = AccessoryInfo[acc.Name]
-			local mult = GameSettings.GetUpdatedMultiplier(acc, info.Multiplier)
-			table.insert(sorted, {guid = guid, data = acc, mult = mult})
-		end
-	end
-	
-	table.sort(sorted, function(a, b) return a.mult < b.mult end)
-	
-	for _, acc in ipairs(sorted) do
-		local item, check, mark = createItem(acc.guid, acc.data, list)
-		if item then
-			check.MouseButton1Click:Connect(function()
-				if selectedAccessories[acc.guid] then
-					selectedAccessories[acc.guid] = nil
-					mark.Visible = false
-					item.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-				else
-					selectedAccessories[acc.guid] = acc.data
-					mark.Visible = true
-					item.BackgroundColor3 = Color3.fromRGB(70, 90, 150)
-				end
-				updateInfo(gui)
-			end)
-		end
-	end
-	
-	list.CanvasSize = UDim2.new(0, 0, 0, table.getn(sorted) * 75)
+--// AUTO FORGE LOOP
+task.spawn(function()
+    while true do
+        task.wait(0.2) -- Speed of forging (Adjust with caution)
+        
+        if IsForging and AutoForgeTargetGUID then
+            local scrolls = GetScrollAmount()
+            
+            if scrolls > 0 then
+                ScrollCounter.Text = "Scrolls: " .. scrolls
+                
+                -- The RF Path based on your provided prompt:
+                -- Services.ForgeService.RF.Forge
+                -- Arguments: GUID (String), Tier (Number)
+                
+                local success = pcall(function()
+                    ForgeService.RF.Forge:InvokeServer(AutoForgeTargetGUID, SCROLL_TIER_TARGET)
+                end)
+                
+                if not success then
+                    warn("Forge Failed - Network or Cooldown")
+                    task.wait(1)
+                end
+            else
+                IsForging = false
+                ScrollCounter.Text = "Out of Scrolls!"
+                -- Update buttons visually
+                for _, child in pairs(ScrollContainer:GetChildren()) do
+                    if child:IsA("Frame") then
+                        child.ActionBtn.Text = "Auto Forge"
+                        child.ActionBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+                    end
+                end
+            end
+        else
+            ScrollCounter.Text = "Scrolls: " .. GetScrollAmount()
+        end
+    end
+end)
+
+--// UI POPULATION
+local function RefreshInventory()
+    -- Clear existing
+    for _, child in pairs(ScrollContainer:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+
+    if not PlayerReplica or not PlayerReplica.Data then 
+        warn("Waiting for data...")
+        return 
+    end
+
+    local accessories = PlayerReplica.Data.AccessoryService.Accessories
+    
+    for guid, itemData in pairs(accessories) do
+        -- Check if it's a valid item
+        if type(itemData) == "table" and itemData.Name then
+            local staticInfo = AccessoryInfo[itemData.Name]
+            
+            if staticInfo then
+                -- Card Frame
+                local Card = Instance.new("Frame")
+                Card.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+                Card.Parent = ScrollContainer
+                
+                local CardCorner = Instance.new("UICorner")
+                CardCorner.CornerRadius = UDim.new(0, 6)
+                CardCorner.Parent = Card
+                
+                -- Item Image
+                local Img = Instance.new("ImageLabel")
+                Img.Size = UDim2.new(0, 80, 0, 80)
+                Img.Position = UDim2.new(0.5, -40, 0, 10)
+                Img.BackgroundTransparency = 1
+                Img.Image = GetAccessoryImage(itemData.Name)
+                Img.Parent = Card
+                
+                -- Name
+                local NameLbl = Instance.new("TextLabel")
+                NameLbl.Size = UDim2.new(1, 0, 0, 20)
+                NameLbl.Position = UDim2.new(0, 0, 0, 95)
+                NameLbl.BackgroundTransparency = 1
+                NameLbl.Text = itemData.Nickname or itemData.Name
+                NameLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+                NameLbl.Font = Enum.Font.GothamBold
+                NameLbl.TextSize = 12
+                NameLbl.Parent = Card
+
+                -- Current Scroll Status
+                local StatusLbl = Instance.new("TextLabel")
+                StatusLbl.Size = UDim2.new(1, 0, 0, 15)
+                StatusLbl.Position = UDim2.new(0, 0, 0, 110)
+                StatusLbl.BackgroundTransparency = 1
+                StatusLbl.TextColor3 = Color3.fromRGB(150, 150, 255)
+                StatusLbl.Font = Enum.Font.Gotham
+                StatusLbl.TextSize = 10
+                
+                if itemData.Scroll then
+                    StatusLbl.Text = itemData.Scroll.Name .. " (T" .. itemData.Scroll.Tier .. ")"
+                else
+                    StatusLbl.Text = "No Scroll"
+                end
+                StatusLbl.Parent = Card
+
+                -- Action Button
+                local Btn = Instance.new("TextButton")
+                Btn.Name = "ActionBtn"
+                Btn.Size = UDim2.new(0.9, 0, 0, 25)
+                Btn.Position = UDim2.new(0.05, 0, 1, -30)
+                Btn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+                Btn.Text = "Auto Forge"
+                Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                Btn.Font = Enum.Font.GothamBold
+                Btn.TextSize = 12
+                Btn.Parent = Card
+                
+                local BtnCorner = Instance.new("UICorner")
+                BtnCorner.CornerRadius = UDim.new(0, 4)
+                BtnCorner.Parent = Btn
+                
+                Btn.MouseButton1Click:Connect(function()
+                    -- Toggle Logic
+                    if AutoForgeTargetGUID == guid and IsForging then
+                        -- Stop
+                        IsForging = false
+                        AutoForgeTargetGUID = nil
+                        Btn.Text = "Auto Forge"
+                        Btn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+                    else
+                        -- Start (Reset others visual first)
+                        for _, c in pairs(ScrollContainer:GetChildren()) do
+                            if c:IsA("Frame") then
+                                c.ActionBtn.Text = "Auto Forge"
+                                c.ActionBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+                            end
+                        end
+                        
+                        AutoForgeTargetGUID = guid
+                        IsForging = true
+                        Btn.Text = "STOP"
+                        Btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+                    end
+                end)
+            end
+        end
+    end
 end
 
--- Update info
-local function updateInfo(gui)
-	if not replica then return end
-	
-	local inv = replica.Data.ItemsService.Inventory
-	local scrolls = inv.Scrolls and inv.Scrolls["5"] or 0
-	local selected = 0
-	
-	for _ in pairs(selectedAccessories) do
-		selected = selected + 1
-	end
-	
-	gui.Main.Info.Text = string.format("Dark Scrolls: %d | Selected: %d", scrolls, selected)
-end
+--// INITIALIZE
+RefreshInventory()
 
--- Auto forge loop
-local function autoForgeLoop()
-	while autoForgeEnabled do
-		task.wait(0.5)
-		
-		local inv = replica.Data.ItemsService.Inventory
-		local scrolls = inv.Scrolls and inv.Scrolls["5"] or 0
-		
-		if scrolls <= 0 then
-			print("No scrolls!")
-			task.wait(2)
-			continue
-		end
-		
-		local forged = false
-		for guid, acc in pairs(selectedAccessories) do
-			if replica.Data.AccessoryService.Accessories[guid] then
-				local result = forgeService:Forge(guid, 5):await()
-				if result then
-					print("Forged:", acc.Name)
-					forged = true
-					task.wait(0.5)
-					break
-				end
-			else
-				selectedAccessories[guid] = nil
-			end
-		end
-		
-		if not forged then
-			task.wait(2)
-		end
-	end
-end
-
--- Initialize
-local gui = createUI()
-
--- Make draggable
-local main = gui.Main
-local dragging = false
-local dragStart = nil
-local startPos = nil
-
-main.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or 
-	   input.UserInputType == Enum.UserInputType.Touch then
-		dragging = true
-		dragStart = input.Position
-		startPos = main.Position
-	end
+--// LISTEN FOR CHANGES (Auto Refresh Inventory)
+-- Using a simple slow loop to refresh stats visual so we don't lag listening to complex signals
+task.spawn(function()
+    while true do
+        task.wait(2)
+        -- Only refresh if we aren't dragging/interacting heavily, but for now simple refresh
+        -- We won't destroy buttons if active, simpler approach:
+        -- Just update the Status Labels if frames exist
+        
+        if PlayerReplica and PlayerReplica.Data then
+             local accessories = PlayerReplica.Data.AccessoryService.Accessories
+             local children = ScrollContainer:GetChildren()
+             -- If inventory count changed, full refresh
+             if #children - 1 ~= 0 then -- -1 for layout
+                -- For simplicity in this script, we just assume static list unless manually refreshed
+                -- But let's update the text of existing items
+             end
+        end
+        ScrollCounter.Text = "Scrolls: " .. GetScrollAmount()
+    end
 end)
 
-main.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or 
-	   input.UserInputType == Enum.UserInputType.Touch then
-		dragging = false
-	end
+-- Add a Refresh Button to header
+local RefreshBtn = Instance.new("TextButton")
+RefreshBtn.Size = UDim2.new(0, 80, 0, 30)
+RefreshBtn.Position = UDim2.new(0.5, -40, 0, 5)
+RefreshBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 200)
+RefreshBtn.Text = "Refresh Inv"
+RefreshBtn.TextColor3 = Color3.fromHex("#ffffff")
+RefreshBtn.Font = Enum.Font.GothamBold
+RefreshBtn.TextSize = 12
+RefreshBtn.Parent = MainFrame
+local RCorner = Instance.new("UICorner"); RCorner.Parent = RefreshBtn
+
+RefreshBtn.MouseButton1Click:Connect(function()
+    IsForging = false
+    AutoForgeTargetGUID = nil
+    RefreshInventory()
 end)
 
-main.InputChanged:Connect(function(input)
-	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or 
-	                 input.UserInputType == Enum.UserInputType.Touch) then
-		local delta = input.Position - dragStart
-		main.Position = UDim2.new(
-			startPos.X.Scale, 
-			startPos.X.Offset + delta.X,
-			startPos.Y.Scale, 
-			startPos.Y.Offset + delta.Y
-		)
-	end
-end)
-
--- Buttons
-gui.Main.Close.MouseButton1Click:Connect(function()
-	gui:Destroy()
-end)
-
-gui.Main:FindFirstChild("SelectBtn", true).MouseButton1Click:Connect(function()
-	for _, item in pairs(gui.Main.List:GetChildren()) do
-		if item:IsA("Frame") then
-			local guid = item.Name
-			local acc = replica.Data.AccessoryService.Accessories[guid]
-			if acc then
-				selectedAccessories[guid] = acc
-				item.Check.Mark.Visible = true
-				item.BackgroundColor3 = Color3.fromRGB(70, 90, 150)
-			end
-		end
-	end
-	updateInfo(gui)
-end)
-
-gui.Main:FindFirstChild("DeselectBtn", true).MouseButton1Click:Connect(function()
-	selectedAccessories = {}
-	for _, item in pairs(gui.Main.List:GetChildren()) do
-		if item:IsA("Frame") then
-			item.Check.Mark.Visible = false
-			item.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-		end
-	end
-	updateInfo(gui)
-end)
-
-gui.Main:FindFirstChild("ForgeBtn", true).MouseButton1Click:Connect(function()
-	autoForgeEnabled = not autoForgeEnabled
-	local btn = gui.Main:FindFirstChild("ForgeBtn", true)
-	if autoForgeEnabled then
-		btn.Text = "STOP AUTO FORGE"
-		btn.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
-		task.spawn(autoForgeLoop)
-	else
-		btn.Text = "START AUTO FORGE"
-		btn.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
-	end
-end)
-
--- Initial update
-updateList(gui)
-updateInfo(gui)
-
--- Listen for changes
-replica:ListenToChange({"AccessoryService", "Accessories"}, function()
-	updateList(gui)
-end)
-
-replica:ListenToChange({"ItemsService", "Inventory"}, function()
-	updateInfo(gui)
-end)
-
-print("Auto Forge loaded!")
+print("Fast Forge Loaded.")
